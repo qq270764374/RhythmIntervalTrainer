@@ -1,0 +1,1139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rhythm-Interval Trainer</title>
+    <style>
+      :root {
+        --bg-1: #0f1c1f;
+        --bg-2: #123037;
+        --panel: #152a2f;
+        --panel-2: #1a353b;
+        --accent: #ffb347;
+        --accent-2: #4dd7c4;
+        --text: #e8f1f2;
+        --muted: #9fb3b8;
+        --danger: #ff6b6b;
+        --ok: #51d88a;
+        --shadow: rgba(0, 0, 0, 0.35);
+        --radius: 16px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Avenir Next", "Futura", "Gill Sans", sans-serif;
+        color: var(--text);
+        background: radial-gradient(1200px 800px at 10% 10%, #1d3a3f 0%, transparent 60%),
+          radial-gradient(800px 600px at 90% 0%, #152a2f 0%, transparent 60%),
+          linear-gradient(160deg, var(--bg-1), var(--bg-2));
+        min-height: 100vh;
+      }
+
+      .app {
+        display: grid;
+        grid-template-columns: 280px 1fr;
+        gap: 16px;
+        padding: 16px;
+      }
+
+      @media (max-width: 900px) {
+        .app {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .panel {
+        background: linear-gradient(160deg, var(--panel), var(--panel-2));
+        border-radius: var(--radius);
+        box-shadow: 0 12px 30px var(--shadow);
+        padding: 16px;
+        animation: panelIn 0.6s ease;
+      }
+
+      @keyframes panelIn {
+        from {
+          opacity: 0;
+          transform: translateY(12px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .sidebar h1 {
+        font-size: 20px;
+        margin: 0 0 12px 0;
+        letter-spacing: 1px;
+      }
+
+      .plan-list {
+        list-style: none;
+        padding: 0;
+        margin: 0 0 12px 0;
+        display: grid;
+        gap: 8px;
+      }
+
+      .plan-item {
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.05);
+        cursor: pointer;
+        border: 1px solid transparent;
+        transition: 0.2s ease;
+      }
+
+      .plan-item.active {
+        border-color: var(--accent);
+        box-shadow: inset 0 0 0 1px rgba(255, 179, 71, 0.3);
+      }
+
+      .plan-actions {
+        display: grid;
+        gap: 8px;
+      }
+
+      button {
+        border: none;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: var(--accent);
+        color: #1b1b1b;
+        cursor: pointer;
+        font-weight: 600;
+        transition: transform 0.15s ease, opacity 0.15s ease;
+      }
+
+      button.secondary {
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--text);
+      }
+
+      button.danger {
+        background: var(--danger);
+        color: #1b1b1b;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      button:active {
+        transform: scale(0.98);
+      }
+
+      .editor {
+        display: grid;
+        gap: 16px;
+      }
+
+      .plan-header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .plan-header input {
+        flex: 1;
+        min-width: 160px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(0, 0, 0, 0.2);
+        color: var(--text);
+      }
+
+      .group {
+        border-radius: 14px;
+        padding: 12px;
+        background: rgba(0, 0, 0, 0.18);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .group-header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+
+      .group-header input {
+        width: 80px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(0, 0, 0, 0.2);
+        color: var(--text);
+      }
+
+      .items {
+        display: grid;
+        gap: 10px;
+      }
+
+      .item {
+        padding: 10px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.04);
+        display: grid;
+        gap: 8px;
+      }
+
+      .item-labels {
+        font-size: 12px;
+        color: var(--muted);
+        letter-spacing: 0.5px;
+      }
+
+      .item-labels span {
+        padding-left: 2px;
+      }
+
+      .item-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 8px;
+      }
+
+      .item input {
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(0, 0, 0, 0.2);
+        color: var(--text);
+      }
+
+      .play-panel {
+        display: grid;
+        gap: 12px;
+      }
+
+      .play-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 8px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      .status {
+        font-size: 18px;
+        font-weight: 600;
+      }
+
+      .progress {
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.1);
+        overflow: hidden;
+      }
+
+      .progress > div {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, var(--accent), var(--accent-2));
+        transition: width 0.2s ease;
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .flash {
+        animation: flash 0.12s ease;
+      }
+
+      @keyframes flash {
+        from {
+          box-shadow: 0 0 0 0 rgba(255, 179, 71, 0.6);
+        }
+        to {
+          box-shadow: 0 0 0 18px rgba(255, 179, 71, 0);
+        }
+      }
+
+      .config-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      select {
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(0, 0, 0, 0.2);
+        color: var(--text);
+      }
+
+      .pill {
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        font-size: 12px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="panel sidebar">
+        <h1>训练计划</h1>
+        <ul class="plan-list" id="planList"></ul>
+        <div class="plan-actions">
+          <button id="addPlanBtn">新建计划</button>
+          <button class="secondary" id="renamePlanBtn">重命名</button>
+          <button class="danger" id="deletePlanBtn">删除计划</button>
+          <button class="secondary" id="resetPresetBtn">恢复默认预设</button>
+        </div>
+      </aside>
+
+      <main class="panel editor">
+        <div class="plan-header">
+          <input id="planNameInput" type="text" placeholder="计划名称" />
+          <button class="secondary" id="addGroupBtn">添加训练组</button>
+        </div>
+
+        <div id="groupsContainer"></div>
+
+        <section class="panel play-panel" id="playPanel">
+          <div class="status" id="statusText">就绪</div>
+          <div class="play-stats">
+            <div>当前项：<span id="currentItemText">-</span></div>
+            <div>剩余时间：<span id="timeLeftText">-</span></div>
+            <div>循环：<span id="loopText">-</span></div>
+            <div>下一项：<span id="nextItemText">-</span></div>
+          </div>
+          <div class="progress"><div id="progressBar"></div></div>
+          <div class="controls">
+            <button id="startPauseBtn">开始</button>
+            <button class="secondary" id="resetBtn">重置</button>
+          </div>
+          <div class="config-row">
+            <label>点击音色</label>
+            <select id="clickType">
+              <option value="wood">木鱼</option>
+              <option value="beep">电子嘀</option>
+              <option value="tick">清脆敲击</option>
+            </select>
+            <span class="pill" id="wakeLockStatus">Wake Lock: 未启用</span>
+            <span class="pill" id="audioStatus">Audio: 未启用</span>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const STORAGE_KEY = "rit_plans_v1";
+      const CURRENT_KEY = "rit_current_plan_v1";
+
+      const defaultPresets = [
+        {
+          planName: "Tabata 经典",
+          groups: [
+            {
+              loop: 4,
+              items: [
+                { name: "冲刺", duration: 20, bpm: 140, rest: 10 },
+                { name: "休息", duration: 10, bpm: 60, rest: 5 }
+              ]
+            }
+          ]
+        },
+        {
+          planName: "基础节奏慢跑",
+          groups: [
+            {
+              loop: 2,
+              items: [
+                { name: "热身走", duration: 60, bpm: 90, rest: 10 },
+                { name: "慢跑", duration: 120, bpm: 120, rest: 15 },
+                { name: "放松走", duration: 60, bpm: 80, rest: 0 }
+              ]
+            }
+          ]
+        },
+        {
+          planName: "晨间力量",
+          groups: [
+            {
+              loop: 3,
+              items: [
+                { name: "深蹲", duration: 30, bpm: 60, rest: 10 },
+                { name: "开合跳", duration: 30, bpm: 120, rest: 10 },
+                { name: "平板支撑", duration: 40, bpm: 50, rest: 15 }
+              ]
+            }
+          ]
+        }
+      ];
+
+      let plans = [];
+      let currentPlanIndex = 0;
+
+      const planList = document.getElementById("planList");
+      const planNameInput = document.getElementById("planNameInput");
+      const groupsContainer = document.getElementById("groupsContainer");
+      const addPlanBtn = document.getElementById("addPlanBtn");
+      const renamePlanBtn = document.getElementById("renamePlanBtn");
+      const deletePlanBtn = document.getElementById("deletePlanBtn");
+      const resetPresetBtn = document.getElementById("resetPresetBtn");
+      const addGroupBtn = document.getElementById("addGroupBtn");
+
+      const statusText = document.getElementById("statusText");
+      const currentItemText = document.getElementById("currentItemText");
+      const timeLeftText = document.getElementById("timeLeftText");
+      const loopText = document.getElementById("loopText");
+      const nextItemText = document.getElementById("nextItemText");
+      const progressBar = document.getElementById("progressBar");
+      const startPauseBtn = document.getElementById("startPauseBtn");
+      const resetBtn = document.getElementById("resetBtn");
+      const clickTypeSelect = document.getElementById("clickType");
+      const wakeLockStatus = document.getElementById("wakeLockStatus");
+      const audioStatus = document.getElementById("audioStatus");
+
+      let audioCtx = null;
+      let masterGain = null;
+      let silentSource = null;
+      let wakeLock = null;
+
+      const metronome = {
+        isRunning: false,
+        tempo: 60,
+        nextNoteTime: 0,
+        scheduleAheadTime: 0.1,
+        lookahead: 25,
+        timerId: null,
+        endTime: 0
+      };
+
+      const runner = {
+        state: "idle",
+        pointer: null,
+        stateStartTime: 0,
+        stateDuration: 0,
+        announced: false,
+        totalSeconds: 0,
+        elapsedBeforeState: 0,
+        pausedState: null,
+        pausedRemaining: 0,
+        rafId: null
+      };
+
+      function loadPlans() {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          try {
+            plans = JSON.parse(raw);
+          } catch (err) {
+            plans = JSON.parse(JSON.stringify(defaultPresets));
+          }
+        } else {
+          plans = JSON.parse(JSON.stringify(defaultPresets));
+        }
+
+        const savedIndex = Number(localStorage.getItem(CURRENT_KEY));
+        if (!Number.isNaN(savedIndex) && plans[savedIndex]) {
+          currentPlanIndex = savedIndex;
+        } else {
+          currentPlanIndex = 0;
+        }
+      }
+
+      function savePlans() {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(plans));
+        localStorage.setItem(CURRENT_KEY, String(currentPlanIndex));
+      }
+
+      function setCurrentPlan(index) {
+        currentPlanIndex = index;
+        savePlans();
+        render();
+      }
+
+      function createPlan(name) {
+        return {
+          planName: name,
+          groups: [
+            {
+              loop: 1,
+              items: [{ name: "新动作", duration: 30, bpm: 80, rest: 10 }]
+            }
+          ]
+        };
+      }
+
+      function renderPlanList() {
+        planList.innerHTML = "";
+        plans.forEach((plan, index) => {
+          const li = document.createElement("li");
+          li.textContent = plan.planName;
+          li.className = "plan-item" + (index === currentPlanIndex ? " active" : "");
+          li.addEventListener("click", () => setCurrentPlan(index));
+          planList.appendChild(li);
+        });
+      }
+
+      function renderGroups() {
+        const plan = plans[currentPlanIndex];
+        groupsContainer.innerHTML = "";
+        planNameInput.value = plan.planName;
+
+        plan.groups.forEach((group, groupIndex) => {
+          const groupEl = document.createElement("div");
+          groupEl.className = "group";
+
+          const header = document.createElement("div");
+          header.className = "group-header";
+
+          const loopLabel = document.createElement("span");
+          loopLabel.textContent = "循环次数";
+          const loopInput = document.createElement("input");
+          loopInput.type = "number";
+          loopInput.min = "1";
+          loopInput.value = group.loop;
+          loopInput.addEventListener("change", (event) => {
+            group.loop = Math.max(1, Number(event.target.value) || 1);
+            savePlans();
+          });
+
+          const addItemBtn = document.createElement("button");
+          addItemBtn.className = "secondary";
+          addItemBtn.textContent = "添加训练项";
+          addItemBtn.addEventListener("click", () => {
+            group.items.push({ name: "新动作", duration: 30, bpm: 80, rest: 10 });
+            savePlans();
+            render();
+          });
+
+          const removeGroupBtn = document.createElement("button");
+          removeGroupBtn.className = "danger";
+          removeGroupBtn.textContent = "删除组";
+          removeGroupBtn.addEventListener("click", () => {
+            if (plan.groups.length <= 1) {
+              alert("至少保留一个训练组");
+              return;
+            }
+            plan.groups.splice(groupIndex, 1);
+            savePlans();
+            render();
+          });
+
+          header.appendChild(loopLabel);
+          header.appendChild(loopInput);
+          header.appendChild(addItemBtn);
+          header.appendChild(removeGroupBtn);
+
+          const itemsEl = document.createElement("div");
+          itemsEl.className = "items";
+
+          group.items.forEach((item, itemIndex) => {
+            const itemEl = document.createElement("div");
+            itemEl.className = "item";
+
+            const labels = document.createElement("div");
+            labels.className = "item-row item-labels";
+            ["动作名称", "时长(秒)", "BPM", "间歇(秒)"].forEach((text) => {
+              const span = document.createElement("span");
+              span.textContent = text;
+              labels.appendChild(span);
+            });
+
+            const row1 = document.createElement("div");
+            row1.className = "item-row";
+            const nameInput = document.createElement("input");
+            nameInput.type = "text";
+            nameInput.value = item.name;
+            nameInput.placeholder = "动作名称";
+            nameInput.setAttribute("aria-label", "动作名称");
+            nameInput.addEventListener("input", (event) => {
+              item.name = event.target.value;
+              savePlans();
+            });
+
+            const durationInput = document.createElement("input");
+            durationInput.type = "number";
+            durationInput.min = "1";
+            durationInput.value = item.duration;
+            durationInput.placeholder = "时长(秒)";
+            durationInput.setAttribute("aria-label", "时长(秒)");
+            durationInput.addEventListener("change", (event) => {
+              item.duration = Math.max(1, Number(event.target.value) || 1);
+              savePlans();
+            });
+
+            const bpmInput = document.createElement("input");
+            bpmInput.type = "number";
+            bpmInput.min = "30";
+            bpmInput.value = item.bpm;
+            bpmInput.placeholder = "BPM";
+            bpmInput.setAttribute("aria-label", "BPM");
+            bpmInput.addEventListener("change", (event) => {
+              item.bpm = Math.max(30, Number(event.target.value) || 30);
+              savePlans();
+            });
+
+            const restInput = document.createElement("input");
+            restInput.type = "number";
+            restInput.min = "0";
+            restInput.value = item.rest;
+            restInput.placeholder = "间歇(秒)";
+            restInput.setAttribute("aria-label", "间歇(秒)");
+            restInput.addEventListener("change", (event) => {
+              item.rest = Math.max(0, Number(event.target.value) || 0);
+              savePlans();
+            });
+
+            row1.appendChild(nameInput);
+            row1.appendChild(durationInput);
+            row1.appendChild(bpmInput);
+            row1.appendChild(restInput);
+
+            const removeItemBtn = document.createElement("button");
+            removeItemBtn.className = "danger";
+            removeItemBtn.textContent = "删除此项";
+            removeItemBtn.addEventListener("click", () => {
+              if (group.items.length <= 1) {
+                alert("每组至少保留一个训练项");
+                return;
+              }
+              group.items.splice(itemIndex, 1);
+              savePlans();
+              render();
+            });
+
+            itemEl.appendChild(labels);
+            itemEl.appendChild(row1);
+            itemEl.appendChild(removeItemBtn);
+            itemsEl.appendChild(itemEl);
+          });
+
+          groupEl.appendChild(header);
+          groupEl.appendChild(itemsEl);
+          groupsContainer.appendChild(groupEl);
+        });
+      }
+
+      function render() {
+        renderPlanList();
+        renderGroups();
+        updateRunStateUI();
+      }
+
+      function resetToPresets() {
+        if (!confirm("确定恢复默认预设吗？这会覆盖现有计划。")) return;
+        plans = JSON.parse(JSON.stringify(defaultPresets));
+        currentPlanIndex = 0;
+        savePlans();
+        render();
+      }
+
+      function sanitizePlan(plan) {
+        plan.planName = plan.planName || "未命名";
+        plan.groups = plan.groups || [];
+        plan.groups.forEach((group) => {
+          group.loop = Math.max(1, Number(group.loop) || 1);
+          group.items = group.items || [];
+          group.items.forEach((item) => {
+            item.name = item.name || "动作";
+            item.duration = Math.max(1, Number(item.duration) || 1);
+            item.bpm = Math.max(30, Number(item.bpm) || 30);
+            item.rest = Math.max(0, Number(item.rest) || 0);
+          });
+        });
+      }
+
+      function buildPointer() {
+        return { groupIndex: 0, itemIndex: 0, loopIndex: 0 };
+      }
+
+      function getItemAt(pointer) {
+        if (!pointer) return null;
+        const plan = plans[currentPlanIndex];
+        const group = plan.groups[pointer.groupIndex];
+        if (!group) return null;
+        return group.items[pointer.itemIndex] || null;
+      }
+
+      function getNextPointer(pointer) {
+        const plan = plans[currentPlanIndex];
+        if (!pointer) return null;
+        const group = plan.groups[pointer.groupIndex];
+        if (!group) return null;
+        if (pointer.itemIndex < group.items.length - 1) {
+          return { groupIndex: pointer.groupIndex, itemIndex: pointer.itemIndex + 1, loopIndex: pointer.loopIndex };
+        }
+        if (pointer.loopIndex < group.loop - 1) {
+          return { groupIndex: pointer.groupIndex, itemIndex: 0, loopIndex: pointer.loopIndex + 1 };
+        }
+        if (pointer.groupIndex < plan.groups.length - 1) {
+          return { groupIndex: pointer.groupIndex + 1, itemIndex: 0, loopIndex: 0 };
+        }
+        return null;
+      }
+
+      function calculateTotalSeconds(plan) {
+        let total = 3;
+        plan.groups.forEach((group) => {
+          for (let loop = 0; loop < group.loop; loop += 1) {
+            group.items.forEach((item) => {
+              total += item.duration + item.rest;
+            });
+          }
+        });
+        return total;
+      }
+
+      function ensureAudio() {
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          masterGain = audioCtx.createGain();
+          masterGain.gain.value = 0.9;
+          masterGain.connect(audioCtx.destination);
+        }
+        return audioCtx.resume().then(() => {
+          audioStatus.textContent = "Audio: 已启用";
+        });
+      }
+
+      function startSilentLoop() {
+        if (!audioCtx || silentSource) return;
+        const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate, audioCtx.sampleRate);
+        const source = audioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.loop = true;
+        const gain = audioCtx.createGain();
+        gain.gain.value = 0.00001;
+        source.connect(gain).connect(masterGain);
+        source.start();
+        silentSource = source;
+      }
+
+      function stopSilentLoop() {
+        if (silentSource) {
+          silentSource.stop();
+          silentSource.disconnect();
+          silentSource = null;
+        }
+      }
+
+      async function requestWakeLock() {
+        if (!("wakeLock" in navigator)) {
+          wakeLockStatus.textContent = "Wake Lock: 不支持";
+          return;
+        }
+        try {
+          wakeLock = await navigator.wakeLock.request("screen");
+          wakeLockStatus.textContent = "Wake Lock: 已启用";
+          wakeLock.addEventListener("release", () => {
+            wakeLockStatus.textContent = "Wake Lock: 已释放";
+          });
+        } catch (err) {
+          wakeLockStatus.textContent = "Wake Lock: 失败";
+        }
+      }
+
+      function releaseWakeLock() {
+        if (wakeLock) {
+          wakeLock.release();
+          wakeLock = null;
+          wakeLockStatus.textContent = "Wake Lock: 已释放";
+        }
+      }
+
+      function flashBeat() {
+        const panel = document.getElementById("playPanel");
+        panel.classList.remove("flash");
+        void panel.offsetWidth;
+        panel.classList.add("flash");
+      }
+
+      function playClick(time) {
+        if (!audioCtx) return;
+        const type = clickTypeSelect.value;
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(0.0001, time);
+        gain.gain.exponentialRampToValueAtTime(0.4, time + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.1);
+
+        if (type === "beep") {
+          const osc = audioCtx.createOscillator();
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(880, time);
+          osc.connect(gain).connect(masterGain);
+          osc.start(time);
+          osc.stop(time + 0.12);
+        } else if (type === "wood") {
+          const osc = audioCtx.createOscillator();
+          osc.type = "square";
+          osc.frequency.setValueAtTime(300, time);
+          const filter = audioCtx.createBiquadFilter();
+          filter.type = "lowpass";
+          filter.frequency.setValueAtTime(800, time);
+          osc.connect(filter).connect(gain).connect(masterGain);
+          osc.start(time);
+          osc.stop(time + 0.12);
+        } else {
+          const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.2, audioCtx.sampleRate);
+          const data = buffer.getChannelData(0);
+          for (let i = 0; i < data.length; i += 1) {
+            data[i] = Math.random() * 2 - 1;
+          }
+          const noise = audioCtx.createBufferSource();
+          noise.buffer = buffer;
+          const filter = audioCtx.createBiquadFilter();
+          filter.type = "bandpass";
+          filter.frequency.setValueAtTime(1800, time);
+          noise.connect(filter).connect(gain).connect(masterGain);
+          noise.start(time);
+          noise.stop(time + 0.12);
+        }
+
+        const delay = Math.max(0, (time - audioCtx.currentTime) * 1000);
+        setTimeout(flashBeat, delay);
+      }
+
+      function scheduler() {
+        if (!metronome.isRunning || !audioCtx) return;
+        while (metronome.nextNoteTime < audioCtx.currentTime + metronome.scheduleAheadTime) {
+          if (metronome.nextNoteTime > metronome.endTime + 0.0001) {
+            metronome.isRunning = false;
+            return;
+          }
+          playClick(metronome.nextNoteTime);
+          metronome.nextNoteTime += 60.0 / metronome.tempo;
+        }
+        metronome.timerId = setTimeout(scheduler, metronome.lookahead);
+      }
+
+      function startMetronome(bpm, startTime, duration) {
+        metronome.tempo = bpm;
+        metronome.nextNoteTime = startTime;
+        metronome.endTime = startTime + duration;
+        metronome.isRunning = true;
+        if (metronome.timerId) clearTimeout(metronome.timerId);
+        scheduler();
+      }
+
+      function stopMetronome() {
+        metronome.isRunning = false;
+        if (metronome.timerId) clearTimeout(metronome.timerId);
+      }
+
+      function speak(text) {
+        if (!("speechSynthesis" in window)) return;
+        window.speechSynthesis.cancel();
+        const msg = new SpeechSynthesisUtterance(text);
+        msg.lang = "zh-CN";
+        window.speechSynthesis.speak(msg);
+      }
+
+      function startTraining() {
+        const plan = plans[currentPlanIndex];
+        sanitizePlan(plan);
+        runner.pointer = buildPointer();
+        runner.totalSeconds = calculateTotalSeconds(plan);
+        runner.elapsedBeforeState = 0;
+        runner.pausedState = null;
+        runner.pausedRemaining = 0;
+
+        ensureAudio().then(() => {
+          startSilentLoop();
+          requestWakeLock();
+          runner.state = "countdown";
+          runner.stateStartTime = audioCtx.currentTime;
+          runner.stateDuration = 3;
+          runner.announced = false;
+          speak(`下一项：${getItemAt(runner.pointer).name}`);
+          startLoop();
+          updateRunStateUI();
+        });
+      }
+
+      function startLoop() {
+        cancelAnimationFrame(runner.rafId);
+        runner.rafId = requestAnimationFrame(loopTick);
+      }
+
+      function loopTick() {
+        if (runner.state === "paused" || runner.state === "idle") return;
+        const now = audioCtx.currentTime;
+        const elapsed = now - runner.stateStartTime;
+        const remaining = Math.max(0, runner.stateDuration - elapsed);
+
+        if (runner.state === "rest") {
+          const announceTime = runner.stateDuration - 3;
+          if (!runner.announced && remaining <= 3 && announceTime >= 0) {
+            const nextPointer = getNextPointer(runner.pointer);
+            if (nextPointer) {
+              const nextItem = getItemAt(nextPointer);
+              speak(`下一项：${nextItem.name}`);
+            }
+            runner.announced = true;
+          }
+        }
+
+        if (remaining <= 0.01) {
+          advanceState();
+        }
+
+        updateRunStateUI();
+        runner.rafId = requestAnimationFrame(loopTick);
+      }
+
+      function advanceState() {
+        const item = getItemAt(runner.pointer);
+        if (!item) {
+          finishTraining();
+          return;
+        }
+
+        if (runner.state === "countdown") {
+          runner.elapsedBeforeState += runner.stateDuration;
+          speak("倒计时结束，开始");
+          runner.state = "action";
+          runner.stateStartTime = audioCtx.currentTime;
+          runner.stateDuration = item.duration;
+          runner.announced = false;
+          startMetronome(item.bpm, runner.stateStartTime, runner.stateDuration);
+          return;
+        }
+
+        if (runner.state === "action") {
+          runner.elapsedBeforeState += runner.stateDuration;
+          stopMetronome();
+          if (item.rest > 0) {
+            runner.state = "rest";
+            runner.stateStartTime = audioCtx.currentTime;
+            runner.stateDuration = item.rest;
+            runner.announced = item.rest < 3;
+            if (item.rest < 3) {
+              const nextPointer = getNextPointer(runner.pointer);
+              if (nextPointer) {
+                const nextItem = getItemAt(nextPointer);
+                speak(`下一项：${nextItem.name}`);
+              }
+            }
+            return;
+          }
+        }
+
+        if (runner.state === "rest" || runner.state === "action") {
+          if (runner.state === "rest") {
+            runner.elapsedBeforeState += runner.stateDuration;
+          }
+          const nextPointer = getNextPointer(runner.pointer);
+          if (!nextPointer) {
+            finishTraining();
+            return;
+          }
+          runner.pointer = nextPointer;
+          const nextItem = getItemAt(runner.pointer);
+          runner.state = "action";
+          runner.stateStartTime = audioCtx.currentTime;
+          runner.stateDuration = nextItem.duration;
+          runner.announced = false;
+          startMetronome(nextItem.bpm, runner.stateStartTime, runner.stateDuration);
+        }
+      }
+
+      function pauseTraining() {
+        if (runner.state === "paused" || runner.state === "idle") return;
+        const now = audioCtx.currentTime;
+        runner.pausedRemaining = Math.max(0, runner.stateDuration - (now - runner.stateStartTime));
+        runner.pausedState = runner.state;
+        stopMetronome();
+        audioCtx.suspend();
+        runner.state = "paused";
+        startPauseBtn.textContent = "继续";
+      }
+
+      function resumeTraining() {
+        if (runner.state !== "paused") return;
+        const previousState = runner.pausedState;
+        audioCtx.resume().then(() => {
+          runner.state = previousState || "action";
+          runner.stateStartTime = audioCtx.currentTime;
+          runner.stateDuration = runner.pausedRemaining > 0 ? runner.pausedRemaining : runner.stateDuration;
+          if (runner.state === "action") {
+            const item = getItemAt(runner.pointer);
+            startMetronome(item.bpm, runner.stateStartTime, runner.stateDuration);
+          }
+          startPauseBtn.textContent = "暂停";
+          runner.pausedState = null;
+          runner.pausedRemaining = 0;
+          startLoop();
+        });
+      }
+
+      function finishTraining() {
+        runner.state = "finished";
+        runner.elapsedBeforeState = runner.totalSeconds;
+        stopMetronome();
+        stopSilentLoop();
+        releaseWakeLock();
+        startPauseBtn.textContent = "开始";
+        statusText.textContent = "训练完成";
+        speak("训练完成");
+      }
+
+      function resetTraining() {
+        runner.state = "idle";
+        runner.pointer = null;
+        runner.stateDuration = 0;
+        runner.stateStartTime = 0;
+        runner.elapsedBeforeState = 0;
+        runner.pausedState = null;
+        runner.pausedRemaining = 0;
+        stopMetronome();
+        stopSilentLoop();
+        releaseWakeLock();
+        if (audioCtx) audioCtx.suspend();
+        cancelAnimationFrame(runner.rafId);
+        startPauseBtn.textContent = "开始";
+        updateRunStateUI();
+      }
+
+      function formatSeconds(seconds) {
+        const m = Math.floor(seconds / 60);
+        const s = Math.floor(seconds % 60);
+        return `${m}:${String(s).padStart(2, "0")}`;
+      }
+
+      function updateRunStateUI() {
+        const plan = plans[currentPlanIndex];
+        if (!plan) return;
+        let stateLabel = "就绪";
+        let timeLeft = "-";
+        let loopInfo = "-";
+        let currentItem = "-";
+        let nextItem = "-";
+        let progress = 0;
+
+        if (runner.state !== "idle") {
+          const item = getItemAt(runner.pointer);
+          const nextPointer = getNextPointer(runner.pointer);
+          const next = nextPointer ? getItemAt(nextPointer) : null;
+          if (item) currentItem = item.name;
+          if (next) nextItem = next.name;
+          if (runner.pointer) {
+            const group = plan.groups[runner.pointer.groupIndex];
+            loopInfo = `${runner.pointer.loopIndex + 1}/${group.loop}`;
+          }
+          const now = audioCtx ? audioCtx.currentTime : 0;
+          const remaining =
+            runner.state === "paused"
+              ? runner.pausedRemaining
+              : Math.max(0, runner.stateDuration - (now - runner.stateStartTime));
+          if (runner.state === "countdown") stateLabel = "准备中";
+          if (runner.state === "action") stateLabel = "训练中";
+          if (runner.state === "rest") stateLabel = "间歇中";
+          if (runner.state === "paused") stateLabel = "已暂停";
+          if (runner.state === "finished") stateLabel = "训练完成";
+          timeLeft = formatSeconds(remaining);
+
+          const total = runner.totalSeconds || 1;
+          const stateElapsed = runner.state === "paused" ? runner.stateDuration - remaining : Math.min(runner.stateDuration, now - runner.stateStartTime);
+          const elapsed = Math.min(total, runner.elapsedBeforeState + stateElapsed);
+          progress = Math.min(100, (elapsed / total) * 100);
+          if (runner.state === "finished") {
+            progress = 100;
+            timeLeft = "0:00";
+          }
+        }
+
+        statusText.textContent = stateLabel;
+        timeLeftText.textContent = timeLeft;
+        loopText.textContent = loopInfo;
+        currentItemText.textContent = currentItem;
+        nextItemText.textContent = nextItem;
+        progressBar.style.width = `${progress}%`;
+      }
+
+      addPlanBtn.addEventListener("click", () => {
+        const name = prompt("计划名称？", "新计划");
+        if (!name) return;
+        plans.push(createPlan(name));
+        currentPlanIndex = plans.length - 1;
+        savePlans();
+        render();
+      });
+
+      renamePlanBtn.addEventListener("click", () => {
+        const plan = plans[currentPlanIndex];
+        const name = prompt("新名称？", plan.planName);
+        if (!name) return;
+        plan.planName = name;
+        savePlans();
+        render();
+      });
+
+      deletePlanBtn.addEventListener("click", () => {
+        if (plans.length <= 1) {
+          alert("至少保留一个计划");
+          return;
+        }
+        if (!confirm("确定删除当前计划吗？")) return;
+        plans.splice(currentPlanIndex, 1);
+        currentPlanIndex = Math.max(0, currentPlanIndex - 1);
+        savePlans();
+        render();
+      });
+
+      resetPresetBtn.addEventListener("click", resetToPresets);
+
+      addGroupBtn.addEventListener("click", () => {
+        const plan = plans[currentPlanIndex];
+        plan.groups.push({
+          loop: 1,
+          items: [{ name: "新动作", duration: 30, bpm: 80, rest: 10 }]
+        });
+        savePlans();
+        render();
+      });
+
+      planNameInput.addEventListener("change", (event) => {
+        const plan = plans[currentPlanIndex];
+        plan.planName = event.target.value || "未命名";
+        savePlans();
+        render();
+      });
+
+      startPauseBtn.addEventListener("click", () => {
+        if (runner.state === "idle" || runner.state === "finished") {
+          startPauseBtn.textContent = "暂停";
+          startTraining();
+          return;
+        }
+        if (runner.state === "paused") {
+          resumeTraining();
+          return;
+        }
+        pauseTraining();
+      });
+
+      resetBtn.addEventListener("click", resetTraining);
+
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible" && runner.state !== "idle") {
+          if (wakeLock) requestWakeLock();
+        }
+      });
+
+      loadPlans();
+      render();
+    </script>
+  </body>
+</html>
