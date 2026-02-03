@@ -409,15 +409,27 @@
       let silentSource = null;
       let wakeLock = null;
 
+      const metronome = {
+        isRunning: false,
+        tempo: 60,
+        nextNoteTime: 0,
+        scheduleAheadTime: 0.1,
+        lookahead: 25,
+        timerId: null,
+        endTime: 0
+      };
+
       const runner = {
         state: "idle",
-        planStartTime: 0,
-        planEndTime: 0,
-        timeline: [],
+        pointer: null,
+        stateStartTime: 0,
+        stateDuration: 0,
+        announced: false,
         totalSeconds: 0,
-        pausedAt: 0,
-        rafId: null,
-        scheduledSources: []
+        elapsedBeforeState: 0,
+        pausedState: null,
+        pausedRemaining: 0,
+        rafId: null
       };
 
       function loadPlans() {
@@ -643,111 +655,33 @@
         });
       }
 
-      function buildTimeline(plan, startTime) {
-        const segments = [];
-        let cursor = startTime;
-        segments.push({
-          type: "countdown",
-          startTime: cursor,
-          endTime: cursor + 3,
-          duration: 3
-        });
-        cursor += 3;
-
-        plan.groups.forEach((group, groupIndex) => {
-          for (let loopIndex = 0; loopIndex < group.loop; loopIndex += 1) {
-            group.items.forEach((item, itemIndex) => {
-              const pointer = { groupIndex, itemIndex, loopIndex };
-              segments.push({
-                type: "action",
-                startTime: cursor,
-                endTime: cursor + item.duration,
-                duration: item.duration,
-                bpm: item.bpm,
-                name: item.name,
-                pointer
-              });
-              cursor += item.duration;
-              if (item.rest > 0) {
-                segments.push({
-                  type: "rest",
-                  startTime: cursor,
-                  endTime: cursor + item.rest,
-                  duration: item.rest,
-                  name: item.name,
-                  pointer
-                });
-                cursor += item.rest;
-              }
-            });
-          }
-        });
-
-        return { segments, endTime: cursor };
+      function buildPointer() {
+        return { groupIndex: 0, itemIndex: 0, loopIndex: 0 };
       }
 
-      function getSegmentAtTime(time) {
-        for (let i = 0; i < runner.timeline.length; i += 1) {
-          const segment = runner.timeline[i];
-          if (time >= segment.startTime && time < segment.endTime) {
-            return { segment, index: i };
-          }
+      function getItemAt(pointer) {
+        if (!pointer) return null;
+        const plan = plans[currentPlanIndex];
+        const group = plan.groups[pointer.groupIndex];
+        if (!group) return null;
+        return group.items[pointer.itemIndex] || null;
+      }
+
+      function getNextPointer(pointer) {
+        const plan = plans[currentPlanIndex];
+        if (!pointer) return null;
+        const group = plan.groups[pointer.groupIndex];
+        if (!group) return null;
+        if (pointer.itemIndex < group.items.length - 1) {
+          return { groupIndex: pointer.groupIndex, itemIndex: pointer.itemIndex + 1, loopIndex: pointer.loopIndex };
+        }
+        if (pointer.loopIndex < group.loop - 1) {
+          return { groupIndex: pointer.groupIndex, itemIndex: 0, loopIndex: pointer.loopIndex + 1 };
+        }
+        if (pointer.groupIndex < plan.groups.length - 1) {
+          return { groupIndex: pointer.groupIndex + 1, itemIndex: 0, loopIndex: 0 };
         }
         return null;
-      }
-
-      function getNextActionSegment(startIndex) {
-        for (let i = startIndex + 1; i < runner.timeline.length; i += 1) {
-          const segment = runner.timeline[i];
-          if (segment.type === "action") return segment;
-        }
-        return null;
-      }
-
-      function trackSource(source) {
-        if (!source) return;
-        runner.scheduledSources.push(source);
-        source.onended = () => {
-          const index = runner.scheduledSources.indexOf(source);
-          if (index >= 0) runner.scheduledSources.splice(index, 1);
-        };
-      }
-
-      function clearScheduledClicks() {
-        runner.scheduledSources.forEach((source) => {
-          try {
-            source.stop();
-          } catch (err) {
-            // ignore already-stopped sources
-          }
-        });
-        runner.scheduledSources = [];
-      }
-
-      function scheduleClicksForSegment(segment, fromTime) {
-        if (segment.type !== "action") return;
-        const interval = 60.0 / segment.bpm;
-        if (!Number.isFinite(interval) || interval <= 0) return;
-        let time = segment.startTime;
-        if (time < fromTime) {
-          const skipped = Math.floor((fromTime - time) / interval);
-          time += skipped * interval;
-          if (time < fromTime - 0.0001) time += interval;
-        }
-        while (time < segment.endTime - 0.0001) {
-          const source = playClick(time);
-          trackSource(source);
-          time += interval;
-        }
-      }
-
-      function scheduleClicksFromTime(fromTime) {
-        clearScheduledClicks();
-        runner.timeline.forEach((segment) => {
-          if (segment.type === "action" && segment.endTime > fromTime) {
-            scheduleClicksForSegment(segment, fromTime);
-          }
-        });
       }
 
       function calculateTotalSeconds(plan) {
@@ -827,14 +761,13 @@
       }
 
       function playClick(time) {
-        if (!audioCtx) return null;
+        if (!audioCtx) return;
         const type = clickTypeSelect.value;
         const gain = audioCtx.createGain();
         gain.gain.setValueAtTime(0.0001, time);
         gain.gain.exponentialRampToValueAtTime(0.4, time + 0.01);
         gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.1);
 
-        let source = null;
         if (type === "beep") {
           const osc = audioCtx.createOscillator();
           osc.type = "sine";
@@ -842,7 +775,6 @@
           osc.connect(gain).connect(masterGain);
           osc.start(time);
           osc.stop(time + 0.12);
-          source = osc;
         } else if (type === "wood") {
           const osc = audioCtx.createOscillator();
           osc.type = "square";
@@ -853,7 +785,6 @@
           osc.connect(filter).connect(gain).connect(masterGain);
           osc.start(time);
           osc.stop(time + 0.12);
-          source = osc;
         } else {
           const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.2, audioCtx.sampleRate);
           const data = buffer.getChannelData(0);
@@ -868,12 +799,37 @@
           noise.connect(filter).connect(gain).connect(masterGain);
           noise.start(time);
           noise.stop(time + 0.12);
-          source = noise;
         }
 
         const delay = Math.max(0, (time - audioCtx.currentTime) * 1000);
         setTimeout(flashBeat, delay);
-        return source;
+      }
+
+      function scheduler() {
+        if (!metronome.isRunning || !audioCtx) return;
+        while (metronome.nextNoteTime < audioCtx.currentTime + metronome.scheduleAheadTime) {
+          if (metronome.nextNoteTime > metronome.endTime + 0.0001) {
+            metronome.isRunning = false;
+            return;
+          }
+          playClick(metronome.nextNoteTime);
+          metronome.nextNoteTime += 60.0 / metronome.tempo;
+        }
+        metronome.timerId = setTimeout(scheduler, metronome.lookahead);
+      }
+
+      function startMetronome(bpm, startTime, duration) {
+        metronome.tempo = bpm;
+        metronome.nextNoteTime = startTime;
+        metronome.endTime = startTime + duration;
+        metronome.isRunning = true;
+        if (metronome.timerId) clearTimeout(metronome.timerId);
+        scheduler();
+      }
+
+      function stopMetronome() {
+        metronome.isRunning = false;
+        if (metronome.timerId) clearTimeout(metronome.timerId);
       }
 
       function speak(text) {
@@ -887,24 +843,20 @@
       function startTraining() {
         const plan = plans[currentPlanIndex];
         sanitizePlan(plan);
+        runner.pointer = buildPointer();
         runner.totalSeconds = calculateTotalSeconds(plan);
-        runner.pausedAt = 0;
+        runner.elapsedBeforeState = 0;
+        runner.pausedState = null;
+        runner.pausedRemaining = 0;
 
         ensureAudio().then(() => {
           startSilentLoop();
           requestWakeLock();
-          const startTime = audioCtx.currentTime;
-          const timelineInfo = buildTimeline(plan, startTime);
-          runner.planStartTime = startTime;
-          runner.planEndTime = timelineInfo.endTime;
-          runner.timeline = timelineInfo.segments;
-          runner.state = "running";
-          scheduleClicksFromTime(startTime);
-          const firstAction = getNextActionSegment(-1);
-          if (firstAction) {
-            speak(`下一项：${firstAction.name}`);
-          }
-          startPauseBtn.textContent = "暂停";
+          runner.state = "countdown";
+          runner.stateStartTime = audioCtx.currentTime;
+          runner.stateDuration = 3;
+          runner.announced = false;
+          speak(`下一项：${getItemAt(runner.pointer).name}`);
           startLoop();
           updateRunStateUI();
         });
@@ -916,35 +868,120 @@
       }
 
       function loopTick() {
-        if (runner.state !== "running") return;
+        if (runner.state === "paused" || runner.state === "idle") return;
+        const now = audioCtx.currentTime;
+        const elapsed = now - runner.stateStartTime;
+        const remaining = Math.max(0, runner.stateDuration - elapsed);
+
+        if (runner.state === "rest") {
+          const announceTime = runner.stateDuration - 3;
+          if (!runner.announced && remaining <= 3 && announceTime >= 0) {
+            const nextPointer = getNextPointer(runner.pointer);
+            if (nextPointer) {
+              const nextItem = getItemAt(nextPointer);
+              speak(`下一项：${nextItem.name}`);
+            }
+            runner.announced = true;
+          }
+        }
+
+        if (remaining <= 0.01) {
+          advanceState();
+        }
+
         updateRunStateUI();
         runner.rafId = requestAnimationFrame(loopTick);
       }
 
+      function advanceState() {
+        const item = getItemAt(runner.pointer);
+        if (!item) {
+          finishTraining();
+          return;
+        }
+
+        if (runner.state === "countdown") {
+          runner.elapsedBeforeState += runner.stateDuration;
+          speak("倒计时结束，开始");
+          runner.state = "action";
+          runner.stateStartTime = audioCtx.currentTime;
+          runner.stateDuration = item.duration;
+          runner.announced = false;
+          startMetronome(item.bpm, runner.stateStartTime, runner.stateDuration);
+          return;
+        }
+
+        if (runner.state === "action") {
+          runner.elapsedBeforeState += runner.stateDuration;
+          stopMetronome();
+          if (item.rest > 0) {
+            runner.state = "rest";
+            runner.stateStartTime = audioCtx.currentTime;
+            runner.stateDuration = item.rest;
+            runner.announced = item.rest < 3;
+            if (item.rest < 3) {
+              const nextPointer = getNextPointer(runner.pointer);
+              if (nextPointer) {
+                const nextItem = getItemAt(nextPointer);
+                speak(`下一项：${nextItem.name}`);
+              }
+            }
+            return;
+          }
+        }
+
+        if (runner.state === "rest" || runner.state === "action") {
+          if (runner.state === "rest") {
+            runner.elapsedBeforeState += runner.stateDuration;
+          }
+          const nextPointer = getNextPointer(runner.pointer);
+          if (!nextPointer) {
+            finishTraining();
+            return;
+          }
+          runner.pointer = nextPointer;
+          const nextItem = getItemAt(runner.pointer);
+          runner.state = "action";
+          runner.stateStartTime = audioCtx.currentTime;
+          runner.stateDuration = nextItem.duration;
+          runner.announced = false;
+          startMetronome(nextItem.bpm, runner.stateStartTime, runner.stateDuration);
+        }
+      }
+
       function pauseTraining() {
-        if (runner.state !== "running") return;
-        runner.pausedAt = audioCtx.currentTime;
-        clearScheduledClicks();
+        if (runner.state === "paused" || runner.state === "idle") return;
+        const now = audioCtx.currentTime;
+        runner.pausedRemaining = Math.max(0, runner.stateDuration - (now - runner.stateStartTime));
+        runner.pausedState = runner.state;
+        stopMetronome();
         audioCtx.suspend();
         runner.state = "paused";
         startPauseBtn.textContent = "继续";
-        updateRunStateUI();
       }
 
       function resumeTraining() {
         if (runner.state !== "paused") return;
+        const previousState = runner.pausedState;
         audioCtx.resume().then(() => {
-          runner.state = "running";
-          scheduleClicksFromTime(audioCtx.currentTime);
+          runner.state = previousState || "action";
+          runner.stateStartTime = audioCtx.currentTime;
+          runner.stateDuration = runner.pausedRemaining > 0 ? runner.pausedRemaining : runner.stateDuration;
+          if (runner.state === "action") {
+            const item = getItemAt(runner.pointer);
+            startMetronome(item.bpm, runner.stateStartTime, runner.stateDuration);
+          }
           startPauseBtn.textContent = "暂停";
+          runner.pausedState = null;
+          runner.pausedRemaining = 0;
           startLoop();
-          updateRunStateUI();
         });
       }
 
       function finishTraining() {
         runner.state = "finished";
-        clearScheduledClicks();
+        runner.elapsedBeforeState = runner.totalSeconds;
+        stopMetronome();
         stopSilentLoop();
         releaseWakeLock();
         startPauseBtn.textContent = "开始";
@@ -954,12 +991,13 @@
 
       function resetTraining() {
         runner.state = "idle";
-        runner.planStartTime = 0;
-        runner.planEndTime = 0;
-        runner.timeline = [];
-        runner.totalSeconds = 0;
-        runner.pausedAt = 0;
-        clearScheduledClicks();
+        runner.pointer = null;
+        runner.stateDuration = 0;
+        runner.stateStartTime = 0;
+        runner.elapsedBeforeState = 0;
+        runner.pausedState = null;
+        runner.pausedRemaining = 0;
+        stopMetronome();
         stopSilentLoop();
         releaseWakeLock();
         if (audioCtx) audioCtx.suspend();
@@ -984,46 +1022,36 @@
         let nextItem = "-";
         let progress = 0;
 
-        if (runner.state === "running" || runner.state === "paused" || runner.state === "finished") {
-          const now = runner.state === "paused" ? runner.pausedAt : audioCtx ? audioCtx.currentTime : 0;
-          if (runner.state === "running" && runner.planEndTime && now >= runner.planEndTime - 0.0001) {
-            finishTraining();
-            return;
+        if (runner.state !== "idle") {
+          const item = getItemAt(runner.pointer);
+          const nextPointer = getNextPointer(runner.pointer);
+          const next = nextPointer ? getItemAt(nextPointer) : null;
+          if (item) currentItem = item.name;
+          if (next) nextItem = next.name;
+          if (runner.pointer) {
+            const group = plan.groups[runner.pointer.groupIndex];
+            loopInfo = `${runner.pointer.loopIndex + 1}/${group.loop}`;
           }
+          const now = audioCtx ? audioCtx.currentTime : 0;
+          const remaining =
+            runner.state === "paused"
+              ? runner.pausedRemaining
+              : Math.max(0, runner.stateDuration - (now - runner.stateStartTime));
+          if (runner.state === "countdown") stateLabel = "准备中";
+          if (runner.state === "action") stateLabel = "训练中";
+          if (runner.state === "rest") stateLabel = "间歇中";
+          if (runner.state === "paused") stateLabel = "已暂停";
+          if (runner.state === "finished") stateLabel = "训练完成";
+          timeLeft = formatSeconds(remaining);
 
-          const segmentInfo = getSegmentAtTime(now);
-          if (segmentInfo && segmentInfo.segment) {
-            const segment = segmentInfo.segment;
-            if (segment.type === "countdown") stateLabel = "准备中";
-            if (segment.type === "action") stateLabel = "训练中";
-            if (segment.type === "rest") stateLabel = "间歇中";
-            if (runner.state === "paused") stateLabel = "已暂停";
-            timeLeft = formatSeconds(Math.max(0, segment.endTime - now));
-
-            if (segment.pointer) {
-              const group = plan.groups[segment.pointer.groupIndex];
-              if (group) loopInfo = `${segment.pointer.loopIndex + 1}/${group.loop}`;
-            }
-
-            if (segment.type === "action" || segment.type === "rest") {
-              currentItem = segment.name || "-";
-              const nextSegment = getNextActionSegment(segmentInfo.index);
-              if (nextSegment) nextItem = nextSegment.name || "-";
-            } else {
-              const firstAction = getNextActionSegment(-1);
-              if (firstAction) nextItem = firstAction.name || "-";
-            }
-
-            const total = runner.totalSeconds || 1;
-            const elapsed = Math.min(total, Math.max(0, now - runner.planStartTime));
-            progress = Math.min(100, (elapsed / total) * 100);
+          const total = runner.totalSeconds || 1;
+          const stateElapsed = runner.state === "paused" ? runner.stateDuration - remaining : Math.min(runner.stateDuration, now - runner.stateStartTime);
+          const elapsed = Math.min(total, runner.elapsedBeforeState + stateElapsed);
+          progress = Math.min(100, (elapsed / total) * 100);
+          if (runner.state === "finished") {
+            progress = 100;
+            timeLeft = "0:00";
           }
-        }
-
-        if (runner.state === "finished") {
-          stateLabel = "训练完成";
-          timeLeft = "0:00";
-          progress = 100;
         }
 
         statusText.textContent = stateLabel;
@@ -1099,9 +1127,8 @@
       resetBtn.addEventListener("click", resetTraining);
 
       document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") {
-          if (wakeLock && runner.state === "running") requestWakeLock();
-          updateRunStateUI();
+        if (document.visibilityState === "visible" && runner.state !== "idle") {
+          if (wakeLock) requestWakeLock();
         }
       });
 
