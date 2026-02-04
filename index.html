@@ -408,6 +408,9 @@
       let masterGain = null;
       let silentSource = null;
       let wakeLock = null;
+      let workletNode = null;
+      let workletReady = false;
+      let useWorklet = false;
 
       const metronome = {
         isRunning: false,
@@ -415,9 +418,24 @@
         nextNoteTime: 0,
         scheduleAheadTime: 0.1,
         lookahead: 25,
+        catchUpThreshold: 0.2,
         timerId: null,
-        endTime: 0
+        endTime: 0,
+        mode: "foreground"
       };
+
+      const schedulerModes = {
+        foreground: { scheduleAheadTime: 0.1, lookahead: 25 },
+        background: { scheduleAheadTime: 4, lookahead: 500 }
+      };
+
+      function applySchedulerMode(mode) {
+        const nextMode = schedulerModes[mode] ? mode : "foreground";
+        const config = schedulerModes[nextMode];
+        metronome.scheduleAheadTime = config.scheduleAheadTime;
+        metronome.lookahead = config.lookahead;
+        metronome.mode = nextMode;
+      }
 
       const runner = {
         state: "idle",
@@ -429,6 +447,10 @@
         elapsedBeforeState: 0,
         pausedState: null,
         pausedRemaining: 0,
+        timeline: null,
+        startAt: 0,
+        pausedElapsed: 0,
+        lastAnnounceSegmentIndex: -1,
         rafId: null
       };
 
@@ -696,6 +718,92 @@
         return total;
       }
 
+      function buildTimeline(plan) {
+        const segments = [];
+        const workletSegments = [];
+        const countdownDuration = 3;
+
+        segments.push({ type: "countdown", duration: countdownDuration });
+        workletSegments.push({ duration: countdownDuration, bpm: 0 });
+
+        let pointer = buildPointer();
+        while (pointer) {
+          const item = getItemAt(pointer);
+          if (!item) break;
+          const pointerCopy = { ...pointer };
+          segments.push({
+            type: "action",
+            duration: item.duration,
+            bpm: item.bpm,
+            pointer: pointerCopy,
+            name: item.name
+          });
+          workletSegments.push({ duration: item.duration, bpm: item.bpm });
+
+          const nextPointer = getNextPointer(pointer);
+          if (item.rest > 0) {
+            segments.push({
+              type: "rest",
+              duration: item.rest,
+              bpm: 0,
+              pointer: pointerCopy,
+              nextPointer: nextPointer ? { ...nextPointer } : null,
+              name: item.name
+            });
+            workletSegments.push({ duration: item.rest, bpm: 0 });
+          }
+          pointer = nextPointer;
+        }
+
+        let totalSeconds = 0;
+        segments.forEach((segment) => {
+          totalSeconds += segment.duration;
+        });
+
+        let upcomingActionName = null;
+        for (let i = segments.length - 1; i >= 0; i -= 1) {
+          const segment = segments[i];
+          if (segment.type === "action") {
+            segment.nextName = upcomingActionName;
+            upcomingActionName = segment.name;
+          } else if (segment.type === "rest") {
+            segment.nextName = upcomingActionName;
+          } else if (segment.type === "countdown") {
+            segment.nextName = upcomingActionName;
+          }
+        }
+
+        return {
+          segments,
+          workletSegments,
+          totalSeconds,
+          firstActionName: upcomingActionName
+        };
+      }
+
+      function getTimelineSnapshot(timeline, elapsedSeconds) {
+        let remainingTime = Math.max(0, elapsedSeconds);
+        for (let i = 0; i < timeline.segments.length; i += 1) {
+          const segment = timeline.segments[i];
+          const duration = Math.max(0, segment.duration);
+          if (remainingTime < duration) {
+            return {
+              segmentIndex: i,
+              segment,
+              elapsedInSegment: remainingTime,
+              remaining: Math.max(0, duration - remainingTime)
+            };
+          }
+          remainingTime -= duration;
+        }
+        return {
+          segmentIndex: timeline.segments.length,
+          segment: null,
+          elapsedInSegment: 0,
+          remaining: 0
+        };
+      }
+
       function ensureAudio() {
         if (!audioCtx) {
           audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -708,6 +816,37 @@
         });
       }
 
+      async function ensureWorklet() {
+        if (!audioCtx || !audioCtx.audioWorklet) return false;
+        if (workletReady && workletNode) return true;
+        try {
+          await audioCtx.audioWorklet.addModule("metronome-worklet.js");
+          workletNode = new AudioWorkletNode(audioCtx, "metronome-worklet");
+          workletNode.connect(masterGain);
+          workletReady = true;
+          return true;
+        } catch (err) {
+          console.warn("AudioWorklet init failed", err);
+          workletReady = false;
+          workletNode = null;
+          return false;
+        }
+      }
+
+      function startWorkletTimeline(startAt, segments) {
+        if (!workletNode) return;
+        workletNode.port.postMessage({
+          type: "start",
+          startAt,
+          segments,
+          clickType: clickTypeSelect.value
+        });
+      }
+
+      function stopWorkletTimeline() {
+        if (!workletNode) return;
+        workletNode.port.postMessage({ type: "stop" });
+      }
       function startSilentLoop() {
         if (!audioCtx || silentSource) return;
         const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate, audioCtx.sampleRate);
@@ -807,7 +946,11 @@
 
       function scheduler() {
         if (!metronome.isRunning || !audioCtx) return;
-        while (metronome.nextNoteTime < audioCtx.currentTime + metronome.scheduleAheadTime) {
+        const now = audioCtx.currentTime;
+        if (metronome.nextNoteTime < now - metronome.catchUpThreshold) {
+          metronome.nextNoteTime = now;
+        }
+        while (metronome.nextNoteTime < now + metronome.scheduleAheadTime) {
           if (metronome.nextNoteTime > metronome.endTime + 0.0001) {
             metronome.isRunning = false;
             return;
@@ -820,7 +963,7 @@
 
       function startMetronome(bpm, startTime, duration) {
         metronome.tempo = bpm;
-        metronome.nextNoteTime = startTime;
+        metronome.nextNoteTime = Math.max(startTime, audioCtx ? audioCtx.currentTime : startTime);
         metronome.endTime = startTime + duration;
         metronome.isRunning = true;
         if (metronome.timerId) clearTimeout(metronome.timerId);
@@ -843,23 +986,61 @@
       function startTraining() {
         const plan = plans[currentPlanIndex];
         sanitizePlan(plan);
+
+        ensureAudio().then(async () => {
+          startSilentLoop();
+          requestWakeLock();
+
+          const workletOk = await ensureWorklet();
+          useWorklet = workletOk;
+
+          if (useWorklet) {
+            startTrainingWorklet(plan);
+          } else {
+            startTrainingLegacy(plan);
+          }
+
+          startLoop();
+          updateRunStateUI();
+        });
+      }
+
+      function startTrainingWorklet(plan) {
+        runner.timeline = buildTimeline(plan);
+        runner.totalSeconds = runner.timeline.totalSeconds;
+        runner.pointer = null;
+        runner.elapsedBeforeState = 0;
+        runner.pausedState = null;
+        runner.pausedRemaining = 0;
+        runner.pausedElapsed = 0;
+        runner.lastAnnounceSegmentIndex = -1;
+        runner.state = "countdown";
+        runner.startAt = audioCtx.currentTime + 0.1;
+        runner.announced = false;
+
+        if (runner.timeline.firstActionName) {
+          speak(`下一项：${runner.timeline.firstActionName}`);
+        }
+        startWorkletTimeline(runner.startAt, runner.timeline.workletSegments);
+      }
+
+      function startTrainingLegacy(plan) {
         runner.pointer = buildPointer();
         runner.totalSeconds = calculateTotalSeconds(plan);
         runner.elapsedBeforeState = 0;
         runner.pausedState = null;
         runner.pausedRemaining = 0;
+        runner.timeline = null;
+        runner.startAt = 0;
+        runner.pausedElapsed = 0;
+        runner.lastAnnounceSegmentIndex = -1;
 
-        ensureAudio().then(() => {
-          startSilentLoop();
-          requestWakeLock();
-          runner.state = "countdown";
-          runner.stateStartTime = audioCtx.currentTime;
-          runner.stateDuration = 3;
-          runner.announced = false;
-          speak(`下一项：${getItemAt(runner.pointer).name}`);
-          startLoop();
-          updateRunStateUI();
-        });
+        applySchedulerMode(document.visibilityState === "hidden" ? "background" : "foreground");
+        runner.state = "countdown";
+        runner.stateStartTime = audioCtx.currentTime;
+        runner.stateDuration = 3;
+        runner.announced = false;
+        speak(`下一项：${getItemAt(runner.pointer).name}`);
       }
 
       function startLoop() {
@@ -869,27 +1050,37 @@
 
       function loopTick() {
         if (runner.state === "paused" || runner.state === "idle") return;
-        const now = audioCtx.currentTime;
-        const elapsed = now - runner.stateStartTime;
-        const remaining = Math.max(0, runner.stateDuration - elapsed);
 
-        if (runner.state === "rest") {
-          const announceTime = runner.stateDuration - 3;
-          if (!runner.announced && remaining <= 3 && announceTime >= 0) {
-            const nextPointer = getNextPointer(runner.pointer);
-            if (nextPointer) {
-              const nextItem = getItemAt(nextPointer);
-              speak(`下一项：${nextItem.name}`);
-            }
-            runner.announced = true;
+        if (useWorklet) {
+          const finished = updateRunStateUIWorklet();
+          if (finished) {
+            finishTraining();
+            return;
           }
+        } else {
+          const now = audioCtx.currentTime;
+          const elapsed = now - runner.stateStartTime;
+          const remaining = Math.max(0, runner.stateDuration - elapsed);
+
+          if (runner.state === "rest") {
+            const announceTime = runner.stateDuration - 3;
+            if (!runner.announced && remaining <= 3 && announceTime >= 0) {
+              const nextPointer = getNextPointer(runner.pointer);
+              if (nextPointer) {
+                const nextItem = getItemAt(nextPointer);
+                speak(`下一项：${nextItem.name}`);
+              }
+              runner.announced = true;
+            }
+          }
+
+          if (remaining <= 0.01) {
+            advanceState();
+          }
+
+          updateRunStateUILegacy();
         }
 
-        if (remaining <= 0.01) {
-          advanceState();
-        }
-
-        updateRunStateUI();
         runner.rafId = requestAnimationFrame(loopTick);
       }
 
@@ -950,6 +1141,27 @@
       }
 
       function pauseTraining() {
+        if (useWorklet) {
+          pauseTrainingWorklet();
+        } else {
+          pauseTrainingLegacy();
+        }
+      }
+
+      function pauseTrainingWorklet() {
+        if (runner.state === "paused" || runner.state === "idle") return;
+        if (!audioCtx) return;
+        runner.pausedElapsed = Math.max(0, audioCtx.currentTime - runner.startAt);
+        runner.state = "paused";
+        stopWorkletTimeline();
+        if (audioCtx.state === "running") {
+          audioCtx.suspend();
+        }
+        startPauseBtn.textContent = "继续";
+        updateRunStateUI();
+      }
+
+      function pauseTrainingLegacy() {
         if (runner.state === "paused" || runner.state === "idle") return;
         const now = audioCtx.currentTime;
         runner.pausedRemaining = Math.max(0, runner.stateDuration - (now - runner.stateStartTime));
@@ -961,6 +1173,29 @@
       }
 
       function resumeTraining() {
+        if (useWorklet) {
+          resumeTrainingWorklet();
+        } else {
+          resumeTrainingLegacy();
+        }
+      }
+
+      function resumeTrainingWorklet() {
+        if (runner.state !== "paused") return;
+        if (!runner.timeline) return;
+        const pausedElapsed = runner.pausedElapsed;
+        audioCtx.resume().then(() => {
+          runner.startAt = audioCtx.currentTime - pausedElapsed;
+          runner.state = "countdown";
+          runner.pausedElapsed = 0;
+          runner.lastAnnounceSegmentIndex = -1;
+          startWorkletTimeline(runner.startAt, runner.timeline.workletSegments);
+          startPauseBtn.textContent = "暂停";
+          startLoop();
+        });
+      }
+
+      function resumeTrainingLegacy() {
         if (runner.state !== "paused") return;
         const previousState = runner.pausedState;
         audioCtx.resume().then(() => {
@@ -979,6 +1214,26 @@
       }
 
       function finishTraining() {
+        if (useWorklet) {
+          finishTrainingWorklet();
+        } else {
+          finishTrainingLegacy();
+        }
+      }
+
+      function finishTrainingWorklet() {
+        runner.state = "finished";
+        runner.pausedElapsed = 0;
+        stopWorkletTimeline();
+        stopSilentLoop();
+        releaseWakeLock();
+        startPauseBtn.textContent = "开始";
+        statusText.textContent = "训练完成";
+        speak("训练完成");
+        updateRunStateUIWorklet();
+      }
+
+      function finishTrainingLegacy() {
         runner.state = "finished";
         runner.elapsedBeforeState = runner.totalSeconds;
         stopMetronome();
@@ -997,7 +1252,12 @@
         runner.elapsedBeforeState = 0;
         runner.pausedState = null;
         runner.pausedRemaining = 0;
+        runner.timeline = null;
+        runner.startAt = 0;
+        runner.pausedElapsed = 0;
+        runner.lastAnnounceSegmentIndex = -1;
         stopMetronome();
+        stopWorkletTimeline();
         stopSilentLoop();
         releaseWakeLock();
         if (audioCtx) audioCtx.suspend();
@@ -1013,6 +1273,111 @@
       }
 
       function updateRunStateUI() {
+        if (useWorklet) {
+          updateRunStateUIWorklet();
+        } else {
+          updateRunStateUILegacy();
+        }
+      }
+
+      function updateRunStateUIWorklet() {
+        const plan = plans[currentPlanIndex];
+        const timeline = runner.timeline;
+        if (!plan || !timeline) {
+          statusText.textContent = "就绪";
+          timeLeftText.textContent = "-";
+          loopText.textContent = "-";
+          currentItemText.textContent = "-";
+          nextItemText.textContent = "-";
+          progressBar.style.width = "0%";
+          return false;
+        }
+
+        let stateLabel = "就绪";
+        let timeLeft = "-";
+        let loopInfo = "-";
+        let currentItem = "-";
+        let nextItem = "-";
+        let progress = 0;
+
+        if (runner.state !== "idle") {
+          const total = timeline.totalSeconds || 1;
+          const elapsed =
+            runner.state === "paused"
+              ? runner.pausedElapsed
+              : Math.max(0, (audioCtx ? audioCtx.currentTime : 0) - runner.startAt);
+
+          if (elapsed >= total) {
+            stateLabel = "训练完成";
+            timeLeft = "0:00";
+            progress = 100;
+            currentItem = "-";
+            nextItem = "-";
+            loopInfo = "-";
+          } else {
+            const snapshot = getTimelineSnapshot(timeline, elapsed);
+            const segment = snapshot.segment;
+            const remaining = snapshot.remaining;
+
+            if (segment) {
+              if (segment.type === "countdown") {
+                stateLabel = "准备中";
+                nextItem = segment.nextName || "-";
+              }
+              if (segment.type === "action") {
+                stateLabel = "训练中";
+                currentItem = segment.name || "-";
+                nextItem = segment.nextName || "-";
+              }
+              if (segment.type === "rest") {
+                stateLabel = "间歇中";
+                currentItem = segment.name || "-";
+                nextItem = segment.nextName || "-";
+              }
+              if (segment.pointer) {
+                const group = plan.groups[segment.pointer.groupIndex];
+                if (group) {
+                  loopInfo = `${segment.pointer.loopIndex + 1}/${group.loop}`;
+                }
+              }
+
+              timeLeft = formatSeconds(remaining);
+              progress = Math.min(100, (elapsed / total) * 100);
+
+              if (
+                segment.type === "rest" &&
+                segment.nextName &&
+                runner.state !== "paused" &&
+                remaining <= 3 &&
+                runner.lastAnnounceSegmentIndex !== snapshot.segmentIndex
+              ) {
+                speak(`下一项：${segment.nextName}`);
+                runner.lastAnnounceSegmentIndex = snapshot.segmentIndex;
+              }
+            }
+          }
+
+          if (runner.state === "paused") {
+            stateLabel = "已暂停";
+          }
+        }
+
+        statusText.textContent = stateLabel;
+        timeLeftText.textContent = timeLeft;
+        loopText.textContent = loopInfo;
+        currentItemText.textContent = currentItem;
+        nextItemText.textContent = nextItem;
+        progressBar.style.width = `${progress}%`;
+
+        const totalSeconds = timeline.totalSeconds || 1;
+        const elapsedNow =
+          runner.state === "paused"
+            ? runner.pausedElapsed
+            : Math.max(0, (audioCtx ? audioCtx.currentTime : 0) - runner.startAt);
+        return elapsedNow >= totalSeconds && runner.state !== "paused";
+      }
+
+      function updateRunStateUILegacy() {
         const plan = plans[currentPlanIndex];
         if (!plan) return;
         let stateLabel = "就绪";
@@ -1126,12 +1491,28 @@
 
       resetBtn.addEventListener("click", resetTraining);
 
-      document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible" && runner.state !== "idle") {
-          if (wakeLock) requestWakeLock();
+      clickTypeSelect.addEventListener("change", () => {
+        if (useWorklet && workletNode) {
+          workletNode.port.postMessage({ type: "clickType", value: clickTypeSelect.value });
         }
       });
 
+      document.addEventListener("visibilitychange", () => {
+        if (!useWorklet) {
+          if (document.visibilityState === "visible") {
+            applySchedulerMode("foreground");
+          } else {
+            applySchedulerMode("background");
+          }
+        }
+
+        if (document.visibilityState === "visible" && runner.state !== "idle") {
+          if (wakeLock) requestWakeLock();
+          if (audioCtx && audioCtx.state === "suspended") {
+            audioCtx.resume();
+          }
+        }
+      });
       loadPlans();
       render();
     </script>
