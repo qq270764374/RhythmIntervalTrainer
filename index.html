@@ -330,6 +330,7 @@
             </select>
             <span class="pill" id="wakeLockStatus">Wake Lock: 未启用</span>
             <span class="pill" id="audioStatus">Audio: 未启用</span>
+            <span class="pill" id="clockStatus">时钟: 未启动</span>
           </div>
         </section>
       </main>
@@ -338,6 +339,7 @@
     <script>
       const STORAGE_KEY = "rit_plans_v1";
       const CURRENT_KEY = "rit_current_plan_v1";
+      const LEGACY_NOTICE_KEY = "rit_legacy_notice_v1";
 
       const defaultPresets = [
         {
@@ -403,6 +405,7 @@
       const clickTypeSelect = document.getElementById("clickType");
       const wakeLockStatus = document.getElementById("wakeLockStatus");
       const audioStatus = document.getElementById("audioStatus");
+      const clockStatus = document.getElementById("clockStatus");
 
       let audioCtx = null;
       let masterGain = null;
@@ -411,6 +414,9 @@
       let workletNode = null;
       let workletReady = false;
       let useWorklet = false;
+      let clockMode = "unknown";
+      let backgroundReliability = "unknown";
+      let workletFailureReason = "";
 
       const metronome = {
         isRunning: false,
@@ -424,17 +430,53 @@
         mode: "foreground"
       };
 
-      const schedulerModes = {
-        foreground: { scheduleAheadTime: 0.1, lookahead: 25 },
-        background: { scheduleAheadTime: 4, lookahead: 500 }
-      };
+      function updateClockStatus(mode, reliability) {
+        if (mode) clockMode = mode;
+        if (reliability) backgroundReliability = reliability;
+        const modeLabel =
+          clockMode === "worklet" ? "Worklet" :
+          clockMode === "legacy" ? "Legacy" :
+          clockMode === "unsupported" ? "不支持" : "未启动";
+        const reliabilityLabel =
+          backgroundReliability === "high" ? "后台较稳" :
+          backgroundReliability === "limited" ? "后台受限" : "未知";
+        clockStatus.textContent = `时钟: ${modeLabel} (${reliabilityLabel})`;
+      }
 
-      function applySchedulerMode(mode) {
-        const nextMode = schedulerModes[mode] ? mode : "foreground";
-        const config = schedulerModes[nextMode];
-        metronome.scheduleAheadTime = config.scheduleAheadTime;
-        metronome.lookahead = config.lookahead;
-        metronome.mode = nextMode;
+      function getWorkletFailureReason(error) {
+        if (window.location.protocol === "file:") {
+          return "当前是 file:// 打开，AudioWorklet 在该模式下常受限。";
+        }
+        if (!window.isSecureContext) {
+          return "当前不是安全上下文，请改用 HTTPS 或 localhost。";
+        }
+        if (!audioCtx || !audioCtx.audioWorklet) {
+          return "浏览器不支持 AudioWorklet。";
+        }
+        const detail = error && error.message ? error.message : "未知错误";
+        return `AudioWorklet 模块加载失败：${detail}`;
+      }
+
+      function showLegacyModeNotice(reason) {
+        if (localStorage.getItem(LEGACY_NOTICE_KEY) === "1") return;
+        const parts = [
+          "当前设备未启用 Worklet 高精度时钟，后台节拍可能变慢。",
+          "建议通过 HTTPS 或 localhost 访问，并在 Android Chrome 中安装为 PWA 使用。"
+        ];
+        if (reason) parts.push(`原因：${reason}`);
+        alert(parts.join("\n"));
+        localStorage.setItem(LEGACY_NOTICE_KEY, "1");
+      }
+
+      function showEnvironmentHints() {
+        if (window.location.protocol === "file:") {
+          audioStatus.textContent = "Audio: file:// 可能限制 Worklet";
+        } else if (!window.isSecureContext) {
+          audioStatus.textContent = "Audio: 非安全上下文";
+        }
+        if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+          wakeLockStatus.textContent = "提示: iOS 后台可能暂停";
+        }
       }
 
       const runner = {
@@ -817,18 +859,23 @@
       }
 
       async function ensureWorklet() {
-        if (!audioCtx || !audioCtx.audioWorklet) return false;
+        if (!audioCtx || !audioCtx.audioWorklet) {
+          workletFailureReason = getWorkletFailureReason();
+          return false;
+        }
         if (workletReady && workletNode) return true;
         try {
           await audioCtx.audioWorklet.addModule("metronome-worklet.js");
           workletNode = new AudioWorkletNode(audioCtx, "metronome-worklet");
           workletNode.connect(masterGain);
           workletReady = true;
+          workletFailureReason = "";
           return true;
         } catch (err) {
           console.warn("AudioWorklet init failed", err);
           workletReady = false;
           workletNode = null;
+          workletFailureReason = getWorkletFailureReason(err);
           return false;
         }
       }
@@ -995,8 +1042,13 @@
           useWorklet = workletOk;
 
           if (useWorklet) {
+            updateClockStatus("worklet", "high");
             startTrainingWorklet(plan);
           } else {
+            const mode = audioCtx && audioCtx.audioWorklet ? "legacy" : "unsupported";
+            updateClockStatus(mode, "limited");
+            audioStatus.textContent = "Audio: Worklet 不可用，已降级";
+            showLegacyModeNotice(workletFailureReason);
             startTrainingLegacy(plan);
           }
 
@@ -1035,7 +1087,9 @@
         runner.pausedElapsed = 0;
         runner.lastAnnounceSegmentIndex = -1;
 
-        applySchedulerMode(document.visibilityState === "hidden" ? "background" : "foreground");
+        metronome.scheduleAheadTime = 0.1;
+        metronome.lookahead = 25;
+        metronome.mode = "foreground";
         runner.state = "countdown";
         runner.stateStartTime = audioCtx.currentTime;
         runner.stateDuration = 3;
@@ -1498,14 +1552,6 @@
       });
 
       document.addEventListener("visibilitychange", () => {
-        if (!useWorklet) {
-          if (document.visibilityState === "visible") {
-            applySchedulerMode("foreground");
-          } else {
-            applySchedulerMode("background");
-          }
-        }
-
         if (document.visibilityState === "visible" && runner.state !== "idle") {
           if (wakeLock) requestWakeLock();
           if (audioCtx && audioCtx.state === "suspended") {
@@ -1513,6 +1559,8 @@
           }
         }
       });
+      updateClockStatus("unknown", "unknown");
+      showEnvironmentHints();
       loadPlans();
       render();
     </script>

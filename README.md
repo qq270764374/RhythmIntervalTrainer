@@ -5,13 +5,20 @@
 ## 功能亮点
 - 多计划管理：创建/重命名/删除，数据持久化在 LocalStorage
 - 训练层级：计划 → 训练组（循环次数） → 训练项（时长/BPM/间歇）
-- 高精度节拍：Web Audio API `currentTime` 调度
+- 高精度节拍：优先使用 AudioWorklet（不可用时降级）
 - 语音播报：Web Speech API 提示“下一项”
 - 预设模板：内置 Tabata/慢跑/晨间力量，支持一键恢复
 - 后台方案：静音音频占位 + Wake Lock
 
 ## 使用方式
-直接用浏览器打开 `index.html` 即可使用。建议在移动端 Chrome/Safari 中体验。
+建议使用本地服务或 HTTPS 访问，不要直接用 `file://` 打开：
+
+```bash
+# 在项目目录执行
+python3 -m http.server 8080
+```
+
+然后访问 `http://localhost:8080`（手机可通过同局域网 IP 访问）。
 
 ## 训练项字段说明
 - 动作名称：用于显示与语音播报
@@ -27,4 +34,6 @@
 
 ## 注意事项
 - 首次点击“开始”会触发音频权限请求
-- 部分浏览器可能限制后台运行效果
+- `file://` 或非安全上下文下，AudioWorklet 可能不可用，后台节拍精度会下降
+- Android Chrome + PWA 场景后台更稳定
+- iOS Safari/Chrome 在后台可能被系统挂起，网页端无法保证完全连续播放
